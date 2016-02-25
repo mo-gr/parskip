@@ -6,24 +6,40 @@ import Control.Applicative
 import Data.Attoparsec.Text
 import Data.Text
 
-foo :: Parser (String, Int)
-foo = do
-  _ <- "foo"
-  skipMany1 space
-  n <- many1 letter
-  skipMany1 space
-  i <- decimal
-  return (n, i)
-
 data Endpoint = Shunt | Hostname Text deriving Show
 data Predicate = Predicate {predName:: Text, predArgs :: [Text]} deriving Show
 data Filter = Filter {filterName :: Text, filterArgs :: [Text]} deriving Show
 data Route = Route {routeId :: Text, predicates :: [Predicate], filters :: [Filter], endpoint :: Endpoint } deriving Show
 
+quoteParser :: Char -> Parser Text
+quoteParser c = do
+   arg <- char c *> takeTill (== c) <* char c
+   return $ snoc (cons c arg) c
+
+dqParser :: Parser Text
+dqParser = quoteParser '"'
+
+sqParser :: Parser Text
+sqParser = quoteParser '\''
+
+btParser :: Parser Text
+btParser = quoteParser '`'
+
+reParser :: Parser Text
+reParser = quoteParser '/'
+
+numberParser :: Parser Text
+numberParser = do
+  num <- scientific
+  return $ pack (show num)
+
 argsParser :: Parser [Text]
-argsParser = do
-  skipWhile (/= ')')
-  return []
+argsParser = (numberParser
+              <|> dqParser
+              <|> sqParser
+              <|> btParser
+              <|> reParser
+             ) `sepBy` (skipSpace *> "," *> skipSpace)
 
 predicateParser :: Parser Predicate
 predicateParser = do
@@ -39,23 +55,44 @@ filterParser = do
 
 endpointParser :: Parser Endpoint
 endpointParser = do
-  skipSpace *> "->" *> skipSpace
   ("<shunt>" >> return Shunt) <|> do
     endpoint <- "\"" *> takeTill (== '"') <* "\""
     return $ Hostname endpoint
 
-eskip :: Parser [Route]
-eskip = do
+eskipRoute :: Parser Route
+eskipRoute = do
   routeId <- takeWhile1 (inClass "a-zA-Z0-9")
   skipSpace *> ":" *> skipSpace
   predicates <- predicateParser `sepBy` (skipSpace *> "&&" *> skipSpace)
   skipSpace *> "->" *> skipSpace
-  filters <- filterParser `sepBy` (skipSpace *> "->" *> skipSpace)
+  filters <- option [] (filterParser `sepBy` (skipSpace *> "->" *> skipSpace) <* skipSpace <* "->" <* skipSpace)
   endpoint <- endpointParser
   skipSpace *> ";"
-  return [Route routeId predicates filters endpoint]
+  return $ Route routeId predicates filters endpoint
 
 main :: IO ()
 main = do
-  parseTest eskip "foo: bla(1, \"2\", /3/) && blub() -> filter(1, \"2\", /3/) -> <shunt>;"
-  parseTest eskip "foo: bla(1, \"2\", /3/) && blub() -> filter(1, \"2\", /3/) -> \"http://bla/blub\";"
+  let pRoute = prettyPrint <$> parseOnly eskipRoute "foo: bla(1) && blub() -> foo() -> bar(/reg/) -> <shunt>;"
+  either print (putStrLn.unpack) pRoute
+  --parseTest eskipRoute "foo: bla(1) -> <shunt>;"
+  --parseTest eskipRoute "foo: bla(`1`) -> <shunt>;"
+  --parseTest eskipRoute "foo: bla(1, \"2\", /3/) && blub() -> filter(1, \"2\", /3/) -> <shunt>;"
+  --parseTest eskipRoute "foo: bla(1, \"2\", /3/) && blub() -> filter(1, \"2\", /3/) -> \"http://bla/blub\";"
+
+class PrettyPrint a where
+  prettyPrint :: a -> Text
+
+instance PrettyPrint Endpoint where
+  prettyPrint Shunt = "<shunt>"
+  prettyPrint (Hostname h) = h
+
+instance PrettyPrint Predicate where
+  prettyPrint p = (predName p) `append` "(" `append` (intercalate ", " (predArgs p)) `append` ")"
+
+instance PrettyPrint Filter where
+  prettyPrint f = (filterName f) `append` "(" `append` (intercalate ", " (filterArgs f)) `append` ")"
+
+instance PrettyPrint Route where
+  prettyPrint r = (routeId r) `append` ": " `append` (intercalate " && " $ prettyPrint <$> predicates r) `append` "\n"
+                  `append` (Data.Text.concat $ flip append "\n" <$> append "  -> " <$> prettyPrint <$> filters r)
+                  `append` "  -> " `append` (prettyPrint (endpoint r)) `append` ";"
