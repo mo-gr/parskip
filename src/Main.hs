@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Parskip where
+module Main where
 
 import Control.Applicative
 import Data.Attoparsec.Text
@@ -61,30 +61,37 @@ endpointParser = do
 
 eskipRoute :: Parser Route
 eskipRoute = do
-  routeId <- takeWhile1 (inClass "a-zA-Z0-9")
+  routeId <- skipSpace *> takeWhile1 (inClass "a-zA-Z0-9")
   skipSpace *> ":" *> skipSpace
   predicates <- predicateParser `sepBy` (skipSpace *> "&&" *> skipSpace)
   skipSpace *> "->" *> skipSpace
   filters <- option [] (filterParser `sepBy` (skipSpace *> "->" *> skipSpace) <* skipSpace <* "->" <* skipSpace)
   endpoint <- endpointParser
-  skipSpace *> ";"
+  skipSpace *> ";" *> skipSpace *> skipMany endOfLine
   return $ Route routeId predicates filters endpoint
 
+parseAndFormat :: String -> String
+parseAndFormat input = let routesOrError = parseOnly (many eskipRoute) (pack input) in
+                           either id (unpack . Data.Text.concat . (fmap prettyPrint)) routesOrError
+
 main :: IO ()
-main = do
+main = interact parseAndFormat
+
+test :: IO ()
+test = do
   let pRoute = prettyPrint <$> parseOnly eskipRoute "foo: bla(1) && blub() -> foo() -> bar(/reg/) -> <shunt>;"
   either print (putStrLn.unpack) pRoute
-  --parseTest eskipRoute "foo: bla(1) -> <shunt>;"
-  --parseTest eskipRoute "foo: bla(`1`) -> <shunt>;"
-  --parseTest eskipRoute "foo: bla(1, \"2\", /3/) && blub() -> filter(1, \"2\", /3/) -> <shunt>;"
-  --parseTest eskipRoute "foo: bla(1, \"2\", /3/) && blub() -> filter(1, \"2\", /3/) -> \"http://bla/blub\";"
+  parseTest eskipRoute "foo: bla(1) -> <shunt>;"
+  parseTest eskipRoute "foo: bla(`1`) -> <shunt>;"
+  parseTest eskipRoute "foo: bla(1, \"2\", /3/) && blub() -> filter(1, \"2\", /3/) -> <shunt>;"
+  parseTest eskipRoute "foo: bla(1, \"2\", /3/) && blub() -> filter(1, \"2\", /3/) -> \"http://bla/blub\";"
 
 class PrettyPrint a where
   prettyPrint :: a -> Text
 
 instance PrettyPrint Endpoint where
   prettyPrint Shunt = "<shunt>"
-  prettyPrint (Hostname h) = h
+  prettyPrint (Hostname h) = "\"" `append` h `append` "\""
 
 instance PrettyPrint Predicate where
   prettyPrint p = (predName p) `append` "(" `append` (intercalate ", " (predArgs p)) `append` ")"
@@ -95,4 +102,4 @@ instance PrettyPrint Filter where
 instance PrettyPrint Route where
   prettyPrint r = (routeId r) `append` ": " `append` (intercalate " && " $ prettyPrint <$> predicates r) `append` "\n"
                   `append` (Data.Text.concat $ flip append "\n" <$> append "  -> " <$> prettyPrint <$> filters r)
-                  `append` "  -> " `append` (prettyPrint (endpoint r)) `append` ";"
+                  `append` "  -> " `append` (prettyPrint (endpoint r)) `append` ";\n\n"

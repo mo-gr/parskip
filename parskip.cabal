@@ -1,14 +1,14 @@
 name:                parskip
 version:             0.1.0.0
-synopsis:            Simple project template from stack
+synopsis:            Simple project to parse and reformat eskip from STDIN
 description:         Please see README.md
 homepage:            http://github.com/githubuser/parskip#readme
 license:             BSD3
 license-file:        LICENSE
-author:              Author name here
-maintainer:          example@example.com
-copyright:           2016 Author Here
-category:            Web
+author:              Moritz Grauel
+maintainer:          mo@notadomain.com
+copyright:           2016 Moritz Grauel
+category:            Tool
 build-type:          Simple
 cabal-version:       >=1.10
 
