@@ -30,10 +30,22 @@ btParser = quoteParser '`'
 reParser :: Parser Text
 reParser = quoteParser '/'
 
+floatParser :: Parser Text
+floatParser = do
+    beforeDot <- decimal
+    char '.'
+    afterDot <- decimal
+    return $ (pack (show beforeDot)) <> "." <> (pack (show afterDot))
+
+integerParser :: Parser Text
+integerParser = do
+    int <- decimal
+    return $ pack (show int)
+
 numberParser :: Parser Text
 numberParser = do
-  num <- scientific
-  return $ pack (show num)
+  num <- floatParser <|> integerParser
+  return $ num
 
 argsParser :: Parser [Text]
 argsParser = (numberParser
@@ -96,6 +108,7 @@ test = do
   either print (putStrLn.unpack) pRoute
   parseTest eskipRoute "foo: * -> <shunt>;"
   parseTest eskipRoute "foo: bla(1) -> <shunt>;"
+  parseTest eskipRoute "foo: bla(0.67) -> <shunt>;"
   parseTest eskipRoute "foo: bla(`1`) -> <shunt>;"
   parseTest eskipRoute "foo: bla(1, \"2\", /3/) && blub() -> filter(1, \"2\", /3/) -> <shunt>;"
   parseTest eskipRoute "foo: bla(1, \"2\", /3/) && blub() -> filter(1, \"2\", /3/) -> \"http://bla/blub\";"
