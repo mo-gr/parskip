@@ -2,10 +2,11 @@
 
 module Main where
 
-import Control.Applicative
-import Data.Attoparsec.Text
-import Data.Text
-import Data.Monoid
+import Prelude hiding (concat)
+import Control.Applicative ((<|>), many)
+import Data.Text (Text, pack, unpack, concat, intercalate, append, cons, snoc)
+import Data.Monoid ((<>))
+import qualified Data.Attoparsec.Text as P
 
 data Endpoint = Shunt | Hostname Text deriving Show
 data Predicate = CatchAll | Predicate NamedPredicate deriving Show
@@ -13,105 +14,105 @@ data NamedPredicate = NamedPredicate {predName:: Text, predArgs :: [Text]} deriv
 data Filter = Filter {filterName :: Text, filterArgs :: [Text]} deriving Show
 data Route = Route {routeId :: Text, predicates :: [Predicate], filters :: [Filter], endpoint :: Endpoint } deriving Show
 
-quoteParser :: Char -> Parser Text
+quoteParser :: Char -> P.Parser Text
 quoteParser c = do
-   arg <- char c *> takeTill (== c) <* char c
+   arg <- P.char c *> P.takeTill (== c) <* P.char c
    return $ snoc (cons c arg) c
 
-dqParser :: Parser Text
+dqParser :: P.Parser Text
 dqParser = quoteParser '"'
 
-sqParser :: Parser Text
+sqParser :: P.Parser Text
 sqParser = quoteParser '\''
 
-btParser :: Parser Text
+btParser :: P.Parser Text
 btParser = quoteParser '`'
 
-reParser :: Parser Text
+reParser :: P.Parser Text
 reParser = quoteParser '/'
 
-floatParser :: Parser Text
+floatParser :: P.Parser Text
 floatParser = do
-    beforeDot <- decimal
-    char '.'
-    afterDot <- decimal
+    beforeDot <- P.decimal
+    P.char '.'
+    afterDot <- P.decimal
     return $ (pack (show beforeDot)) <> "." <> (pack (show afterDot))
 
-integerParser :: Parser Text
+integerParser :: P.Parser Text
 integerParser = do
-    int <- decimal
+    int <- P.decimal
     return $ pack (show int)
 
-numberParser :: Parser Text
+numberParser :: P.Parser Text
 numberParser = do
   num <- floatParser <|> integerParser
   return $ num
 
-argsParser :: Parser [Text]
+argsParser :: P.Parser [Text]
 argsParser = (numberParser
               <|> dqParser
               <|> sqParser
               <|> btParser
               <|> reParser
-             ) `sepBy` (skipSpace *> "," *> skipSpace)
+             ) `P.sepBy` (P.skipSpace *> "," *> P.skipSpace)
 
-predicateParser :: Parser Predicate
+predicateParser :: P.Parser Predicate
 predicateParser = catchAllParser <|> namedPredicateParser
 
-catchAllParser :: Parser Predicate
+catchAllParser :: P.Parser Predicate
 catchAllParser = "*" >> return CatchAll
 
-namedPredicateParser :: Parser Predicate
+namedPredicateParser :: P.Parser Predicate
 namedPredicateParser = do
-  predicateName <- takeWhile1 (inClass "a-zA-Z0-9")
+  predicateName <- P.takeWhile1 (P.inClass "a-zA-Z0-9")
   args <- "(" *> argsParser <* ")"
   return $ Predicate $ NamedPredicate predicateName args
 
-filterParser :: Parser Filter
+filterParser :: P.Parser Filter
 filterParser = do
-  predicateName <- takeWhile1 (inClass "a-zA-Z0-9")
+  predicateName <- P.takeWhile1 (P.inClass "a-zA-Z0-9")
   args <- "(" *> argsParser <* ")"
   return $ Filter predicateName args
 
-endpointParser :: Parser Endpoint
+endpointParser :: P.Parser Endpoint
 endpointParser = do
   ("<shunt>" >> return Shunt) <|> do
-    endpoint <- "\"" *> takeTill (== '"') <* "\""
+    endpoint <- "\"" *> P.takeTill (== '"') <* "\""
     return $ Hostname endpoint
 
-eskipRoute :: Parser Route
+eskipRoute :: P.Parser Route
 eskipRoute = do
-  routeId <- skipSpace *> takeWhile1 (inClass "a-zA-Z0-9")
-  skipSpace *> ":" *> skipSpace
-  predicates <- predicateParser `sepBy` (skipSpace *> "&&" *> skipSpace)
-  skipSpace *> "->" *> skipSpace
-  filters <- option [] (filterParser `sepBy` (skipSpace *> "->" *> skipSpace) <* skipSpace <* "->" <* skipSpace)
+  routeId <- P.skipSpace *> P.takeWhile1 (P.inClass "a-zA-Z0-9")
+  P.skipSpace *> ":" *> P.skipSpace
+  predicates <- predicateParser `P.sepBy` (P.skipSpace *> "&&" *> P.skipSpace)
+  P.skipSpace *> "->" *> P.skipSpace
+  filters <- P.option [] (filterParser `P.sepBy` (P.skipSpace *> "->" *> P.skipSpace) <* P.skipSpace <* "->" <* P.skipSpace)
   endpoint <- endpointParser
-  skipSpace *> ";" *> skipSpace *> skipMany endOfLine
+  P.skipSpace *> ";" *> P.skipSpace *> P.skipMany P.endOfLine
   return $ Route routeId predicates filters endpoint
 
-commentLine :: Parser ()
+commentLine :: P.Parser ()
 commentLine = do
-  skipWhile (\c -> not $ isEndOfLine c)
+  P.skipWhile (\c -> not $ P.isEndOfLine c)
   return ()
 
 parseAndFormat :: String -> String
-parseAndFormat input = let routesOrError = parseOnly (many eskipRoute) (pack input) in
-                           either id (unpack . Data.Text.concat . (fmap prettyPrint)) routesOrError
+parseAndFormat input = let routesOrError = P.parseOnly (many eskipRoute) (pack input) in
+                           either id (unpack . concat . (fmap prettyPrint)) routesOrError
 
 main :: IO ()
 main = interact parseAndFormat
 
 test :: IO ()
 test = do
-  let pRoute = prettyPrint <$> parseOnly eskipRoute "foo: bla(1) && blub() -> foo() -> bar(/reg/) -> <shunt>;"
+  let pRoute = prettyPrint <$> P.parseOnly eskipRoute "foo: bla(1) && blub() -> foo() -> bar(/reg/) -> <shunt>;"
   either print (putStrLn.unpack) pRoute
-  parseTest eskipRoute "foo: * -> <shunt>;"
-  parseTest eskipRoute "foo: bla(1) -> <shunt>;"
-  parseTest eskipRoute "foo: bla(0.67) -> <shunt>;"
-  parseTest eskipRoute "foo: bla(`1`) -> <shunt>;"
-  parseTest eskipRoute "foo: bla(1, \"2\", /3/) && blub() -> filter(1, \"2\", /3/) -> <shunt>;"
-  parseTest eskipRoute "foo: bla(1, \"2\", /3/) && blub() -> filter(1, \"2\", /3/) -> \"http://bla/blub\";"
+  P.parseTest eskipRoute "foo: * -> <shunt>;"
+  P.parseTest eskipRoute "foo: bla(1) -> <shunt>;"
+  P.parseTest eskipRoute "foo: bla(0.67) -> <shunt>;"
+  P.parseTest eskipRoute "foo: bla(`1`) -> <shunt>;"
+  P.parseTest eskipRoute "foo: bla(1, \"2\", /3/) && blub() -> filter(1, \"2\", /3/) -> <shunt>;"
+  P.parseTest eskipRoute "foo: bla(1, \"2\", /3/) && blub() -> filter(1, \"2\", /3/) -> \"http://bla/blub\";"
 
 class PrettyPrint a where
   prettyPrint :: a -> Text
@@ -129,5 +130,5 @@ instance PrettyPrint Filter where
 
 instance PrettyPrint Route where
   prettyPrint r = (routeId r) <> ": " <> (intercalate " && " $ prettyPrint <$> predicates r) <> "\n"
-                  <> (Data.Text.concat $ flip append "\n" <$> append "  -> " <$> prettyPrint <$> filters r)
+                  <> (concat $ flip append "\n" <$> append "  -> " <$> prettyPrint <$> filters r)
                   <> "  -> " <> (prettyPrint (endpoint r)) <> ";\n\n"
