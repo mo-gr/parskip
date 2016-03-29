@@ -6,48 +6,36 @@ import Control.Applicative
 import Data.Attoparsec.Text
 import Data.Text
 import Data.Monoid
+import Data.Scientific (Scientific, FPFormat(Fixed), isInteger, formatScientific)
 
+data Argument = Textual Text | Numeric Scientific | RegExpic Text deriving Show
 data Endpoint = Shunt | Hostname Text deriving Show
 data Predicate = CatchAll | Predicate NamedPredicate deriving Show
-data NamedPredicate = NamedPredicate {predName:: Text, predArgs :: [Text]} deriving Show
-data Filter = Filter {filterName :: Text, filterArgs :: [Text]} deriving Show
+data NamedPredicate = NamedPredicate {predName:: Text, predArgs :: [Argument]} deriving Show
+data Filter = Filter {filterName :: Text, filterArgs :: [Argument]} deriving Show
 data Route = Route {routeId :: Text, predicates :: [Predicate], filters :: [Filter], endpoint :: Endpoint } deriving Show
 
-quoteParser :: Char -> Parser Text
-quoteParser c = do
+quoteParser :: Char -> (Text -> Argument) -> Parser Argument
+quoteParser c constructor = do
    arg <- char c *> takeTill (== c) <* char c
-   return $ snoc (cons c arg) c
+   return $ constructor (snoc (cons c arg) c)
 
-dqParser :: Parser Text
-dqParser = quoteParser '"'
+dqParser :: Parser Argument
+dqParser = quoteParser '"' Textual
 
-sqParser :: Parser Text
-sqParser = quoteParser '\''
+sqParser :: Parser Argument
+sqParser = quoteParser '\'' Textual
 
-btParser :: Parser Text
-btParser = quoteParser '`'
+btParser :: Parser Argument
+btParser = quoteParser '`' Textual
 
-reParser :: Parser Text
-reParser = quoteParser '/'
+reParser :: Parser Argument
+reParser = quoteParser '/' RegExpic
 
-floatParser :: Parser Text
-floatParser = do
-    beforeDot <- decimal
-    char '.'
-    afterDot <- decimal
-    return $ (pack (show beforeDot)) <> "." <> (pack (show afterDot))
+numberParser :: Parser Argument
+numberParser = fmap Numeric scientific
 
-integerParser :: Parser Text
-integerParser = do
-    int <- decimal
-    return $ pack (show int)
-
-numberParser :: Parser Text
-numberParser = do
-  num <- floatParser <|> integerParser
-  return $ num
-
-argsParser :: Parser [Text]
+argsParser :: Parser [Argument]
 argsParser = (numberParser
               <|> dqParser
               <|> sqParser
@@ -121,13 +109,22 @@ instance PrettyPrint Endpoint where
   prettyPrint (Hostname h) = "\"" <> h <> "\""
 
 instance PrettyPrint Predicate where
-  prettyPrint (Predicate p) = (predName p) <> "(" <> (intercalate ", " (predArgs p)) <> ")"
+  prettyPrint (Predicate p) = (predName p) <> "(" <> (intercalate ", " (fmap prettyPrint (predArgs p))) <> ")"
   prettyPrint CatchAll = "*"
 
 instance PrettyPrint Filter where
-  prettyPrint f = (filterName f) <> "(" <> (intercalate ", " (filterArgs f)) <> ")"
+  prettyPrint f = (filterName f) <> "(" <> (intercalate ", " (fmap prettyPrint (filterArgs f))) <> ")"
 
 instance PrettyPrint Route where
   prettyPrint r = (routeId r) <> ": " <> (intercalate " && " $ prettyPrint <$> predicates r) <> "\n"
                   <> (Data.Text.concat $ flip append "\n" <$> append "  -> " <$> prettyPrint <$> filters r)
                   <> "  -> " <> (prettyPrint (endpoint r)) <> ";\n\n"
+
+instance PrettyPrint Argument where
+  prettyPrint (RegExpic a) = a
+  prettyPrint (Textual a) = a
+  prettyPrint (Numeric n) =
+    if isInteger n then
+      pack (formatScientific Fixed (Just 0) n)
+    else
+      pack (formatScientific Fixed Nothing n)
