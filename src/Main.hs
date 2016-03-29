@@ -33,20 +33,18 @@ reParser = quoteParser '/'
 
 floatParser :: P.Parser Text
 floatParser = do
-    beforeDot <- P.decimal
-    P.char '.'
-    afterDot <- P.decimal
-    return $ (pack (show beforeDot)) <> "." <> (pack (show afterDot))
+    beforeDot <- P.decimal :: P.Parser Int
+    _ <- P.char '.'
+    afterDot <- P.decimal :: P.Parser Int
+    return $ pack (show beforeDot) <> "." <> pack (show afterDot)
 
 integerParser :: P.Parser Text
 integerParser = do
-    int <- P.decimal
+    int <- P.decimal :: P.Parser Int
     return $ pack (show int)
 
 numberParser :: P.Parser Text
-numberParser = do
-  num <- floatParser <|> integerParser
-  return $ num
+numberParser = floatParser <|> integerParser
 
 argsParser :: P.Parser [Text]
 argsParser = (numberParser
@@ -75,30 +73,29 @@ filterParser = do
   return $ Filter predicateName args
 
 endpointParser :: P.Parser Endpoint
-endpointParser = do
-  ("<shunt>" >> return Shunt) <|> do
-    endpoint <- "\"" *> P.takeTill (== '"') <* "\""
-    return $ Hostname endpoint
+endpointParser = ("<shunt>" >> return Shunt) <|> do
+    endpoint' <- "\"" *> P.takeTill (== '"') <* "\""
+    return $ Hostname endpoint'
 
 eskipRoute :: P.Parser Route
 eskipRoute = do
-  routeId <- P.skipSpace *> P.takeWhile1 (P.inClass "a-zA-Z0-9")
+  routeId' <- P.skipSpace *> P.takeWhile1 (P.inClass "a-zA-Z0-9")
   P.skipSpace *> ":" *> P.skipSpace
-  predicates <- predicateParser `P.sepBy` (P.skipSpace *> "&&" *> P.skipSpace)
+  predicates' <- predicateParser `P.sepBy` (P.skipSpace *> "&&" *> P.skipSpace)
   P.skipSpace *> "->" *> P.skipSpace
-  filters <- P.option [] (filterParser `P.sepBy` (P.skipSpace *> "->" *> P.skipSpace) <* P.skipSpace <* "->" <* P.skipSpace)
-  endpoint <- endpointParser
+  filters' <- P.option [] (filterParser `P.sepBy` (P.skipSpace *> "->" *> P.skipSpace) <* P.skipSpace <* "->" <* P.skipSpace)
+  endpoint' <- endpointParser
   P.skipSpace *> ";" *> P.skipSpace *> P.skipMany P.endOfLine
-  return $ Route routeId predicates filters endpoint
+  return $ Route routeId' predicates' filters' endpoint'
 
 commentLine :: P.Parser ()
 commentLine = do
-  P.skipWhile (\c -> not $ P.isEndOfLine c)
+  P.skipWhile (not . P.isEndOfLine)
   return ()
 
 parseAndFormat :: String -> String
 parseAndFormat input = let routesOrError = P.parseOnly (many eskipRoute) (pack input) in
-                           either id (unpack . concat . (fmap prettyPrint)) routesOrError
+                           either id (unpack . concat . fmap prettyPrint) routesOrError
 
 main :: IO ()
 main = interact parseAndFormat
@@ -122,13 +119,13 @@ instance PrettyPrint Endpoint where
   prettyPrint (Hostname h) = "\"" <> h <> "\""
 
 instance PrettyPrint Predicate where
-  prettyPrint (Predicate p) = (predName p) <> "(" <> (intercalate ", " (predArgs p)) <> ")"
+  prettyPrint (Predicate p) = predName p <> "(" <> intercalate ", " (predArgs p) <> ")"
   prettyPrint CatchAll = "*"
 
 instance PrettyPrint Filter where
-  prettyPrint f = (filterName f) <> "(" <> (intercalate ", " (filterArgs f)) <> ")"
+  prettyPrint f = filterName f <> "(" <> intercalate ", " (filterArgs f) <> ")"
 
 instance PrettyPrint Route where
-  prettyPrint r = (routeId r) <> ": " <> (intercalate " && " $ prettyPrint <$> predicates r) <> "\n"
-                  <> (concat $ flip append "\n" <$> append "  -> " <$> prettyPrint <$> filters r)
-                  <> "  -> " <> (prettyPrint (endpoint r)) <> ";\n\n"
+  prettyPrint r = routeId r <> ": " <> intercalate " && " (prettyPrint <$> predicates r) <> "\n"
+                  <> concat (flip append "\n" <$> append "  -> " <$> prettyPrint <$> filters r)
+                  <> "  -> " <> prettyPrint (endpoint r) <> ";\n\n"
