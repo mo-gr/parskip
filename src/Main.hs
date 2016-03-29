@@ -125,3 +125,4 @@ instance PrettyPrint Argument where
   prettyPrint (Textual a)               = a
   prettyPrint (Numeric n) | isInteger n = pack (formatScientific Fixed (Just 0) n)
   prettyPrint (Numeric n)               = pack (formatScientific Fixed Nothing n)
+
