@@ -33,7 +33,7 @@ reParser :: Parser Argument
 reParser = quoteParser '/' RegExpic
 
 numberParser :: Parser Argument
-numberParser = fmap Numeric scientific
+numberParser = Numeric <$> scientific
 
 argsParser :: Parser [Argument]
 argsParser = (numberParser
@@ -92,7 +92,7 @@ main = interact parseAndFormat
 
 test :: IO ()
 test = do
-  let pRoute = prettyPrint <$> parseOnly eskipRoute "foo: bla(1) && blub() -> foo() -> bar(/reg/) -> <shunt>;"
+  let pRoute = prettyPrint <$> parseOnly eskipRoute "foo: bla(1) && blub(1.0) -> foo(1.1) -> bar(/reg/) -> <shunt>;"
   either print (putStrLn.unpack) pRoute
   parseTest eskipRoute "foo: * -> <shunt>;"
   parseTest eskipRoute "foo: bla(1) -> <shunt>;"
@@ -109,11 +109,11 @@ instance PrettyPrint Endpoint where
   prettyPrint (Hostname h) = "\"" <> h <> "\""
 
 instance PrettyPrint Predicate where
-  prettyPrint (Predicate p) = (predName p) <> "(" <> (intercalate ", " (fmap prettyPrint (predArgs p))) <> ")"
+  prettyPrint (Predicate p) = (predName p) <> "(" <> (intercalate ", " (prettyPrint <$> predArgs p)) <> ")"
   prettyPrint CatchAll = "*"
 
 instance PrettyPrint Filter where
-  prettyPrint f = (filterName f) <> "(" <> (intercalate ", " (fmap prettyPrint (filterArgs f))) <> ")"
+  prettyPrint f = (filterName f) <> "(" <> (intercalate ", " (prettyPrint <$> filterArgs f)) <> ")"
 
 instance PrettyPrint Route where
   prettyPrint r = (routeId r) <> ": " <> (intercalate " && " $ prettyPrint <$> predicates r) <> "\n"
@@ -121,10 +121,7 @@ instance PrettyPrint Route where
                   <> "  -> " <> (prettyPrint (endpoint r)) <> ";\n\n"
 
 instance PrettyPrint Argument where
-  prettyPrint (RegExpic a) = a
-  prettyPrint (Textual a) = a
-  prettyPrint (Numeric n) =
-    if isInteger n then
-      pack (formatScientific Fixed (Just 0) n)
-    else
-      pack (formatScientific Fixed Nothing n)
+  prettyPrint (RegExpic a)              = a
+  prettyPrint (Textual a)               = a
+  prettyPrint (Numeric n) | isInteger n = pack (formatScientific Fixed (Just 0) n)
+  prettyPrint (Numeric n)               = pack (formatScientific Fixed Nothing n)
