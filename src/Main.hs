@@ -6,95 +6,85 @@ import Prelude hiding (concat)
 import Control.Applicative ((<|>), many)
 import Data.Text (Text, pack, unpack, concat, intercalate, append, cons, snoc)
 import Data.Monoid ((<>))
-import qualified Data.Attoparsec.Text as P
+import Data.Scientific (Scientific, FPFormat(Fixed), isInteger, formatScientific)
+import Data.Attoparsec.Text (Parser, skipSpace, skipMany, skipWhile, char, takeTill, takeWhile1, scientific, sepBy, inClass, option, endOfLine, isEndOfLine, parseOnly, parseTest)
 
+data Argument = Textual Text | Numeric Scientific | RegExpic Text deriving Show
 data Endpoint = Shunt | Hostname Text deriving Show
 data Predicate = CatchAll | Predicate NamedPredicate deriving Show
-data NamedPredicate = NamedPredicate {predName:: Text, predArgs :: [Text]} deriving Show
-data Filter = Filter {filterName :: Text, filterArgs :: [Text]} deriving Show
+data NamedPredicate = NamedPredicate {predName:: Text, predArgs :: [Argument]} deriving Show
+data Filter = Filter {filterName :: Text, filterArgs :: [Argument]} deriving Show
 data Route = Route {routeId :: Text, predicates :: [Predicate], filters :: [Filter], endpoint :: Endpoint } deriving Show
 
-quoteParser :: Char -> P.Parser Text
-quoteParser c = do
-   arg <- P.char c *> P.takeTill (== c) <* P.char c
-   return $ snoc (cons c arg) c
+quoteParser :: Char -> (Text -> Argument) -> Parser Argument
+quoteParser c constructor = do
+   arg <- char c *> takeTill (== c) <* char c
+   return $ constructor (snoc (cons c arg) c)
 
-dqParser :: P.Parser Text
-dqParser = quoteParser '"'
+dqParser :: Parser Argument
+dqParser = quoteParser '"' Textual
 
-sqParser :: P.Parser Text
-sqParser = quoteParser '\''
+sqParser :: Parser Argument
+sqParser = quoteParser '\'' Textual
 
-btParser :: P.Parser Text
-btParser = quoteParser '`'
+btParser :: Parser Argument
+btParser = quoteParser '`' Textual
 
-reParser :: P.Parser Text
-reParser = quoteParser '/'
+reParser :: Parser Argument
+reParser = quoteParser '/' RegExpic
 
-floatParser :: P.Parser Text
-floatParser = do
-    beforeDot <- P.decimal :: P.Parser Int
-    _ <- P.char '.'
-    afterDot <- P.decimal :: P.Parser Int
-    return $ pack (show beforeDot) <> "." <> pack (show afterDot)
+numberParser :: Parser Argument
+numberParser = Numeric <$> scientific
 
-integerParser :: P.Parser Text
-integerParser = do
-    int <- P.decimal :: P.Parser Int
-    return $ pack (show int)
-
-numberParser :: P.Parser Text
-numberParser = floatParser <|> integerParser
-
-argsParser :: P.Parser [Text]
+argsParser :: Parser [Argument]
 argsParser = (numberParser
               <|> dqParser
               <|> sqParser
               <|> btParser
               <|> reParser
-             ) `P.sepBy` (P.skipSpace *> "," *> P.skipSpace)
+             ) `sepBy` (skipSpace *> "," *> skipSpace)
 
-predicateParser :: P.Parser Predicate
+predicateParser :: Parser Predicate
 predicateParser = catchAllParser <|> namedPredicateParser
 
-catchAllParser :: P.Parser Predicate
+catchAllParser :: Parser Predicate
 catchAllParser = "*" >> return CatchAll
 
-namedPredicateParser :: P.Parser Predicate
+namedPredicateParser :: Parser Predicate
 namedPredicateParser = do
-  predicateName <- P.takeWhile1 (P.inClass "a-zA-Z0-9")
+  predicateName <- takeWhile1 (inClass "a-zA-Z0-9")
   args <- "(" *> argsParser <* ")"
   return $ Predicate $ NamedPredicate predicateName args
 
-filterParser :: P.Parser Filter
+filterParser :: Parser Filter
 filterParser = do
-  predicateName <- P.takeWhile1 (P.inClass "a-zA-Z0-9")
+  predicateName <- takeWhile1 (inClass "a-zA-Z0-9")
   args <- "(" *> argsParser <* ")"
   return $ Filter predicateName args
 
-endpointParser :: P.Parser Endpoint
+endpointParser :: Parser Endpoint
 endpointParser = ("<shunt>" >> return Shunt) <|> do
-    endpoint' <- "\"" *> P.takeTill (== '"') <* "\""
+    endpoint' <- "\"" *> takeTill (== '"') <* "\""
     return $ Hostname endpoint'
 
-eskipRoute :: P.Parser Route
+eskipRoute :: Parser Route
 eskipRoute = do
-  routeId' <- P.skipSpace *> P.takeWhile1 (P.inClass "a-zA-Z0-9")
-  P.skipSpace *> ":" *> P.skipSpace
-  predicates' <- predicateParser `P.sepBy` (P.skipSpace *> "&&" *> P.skipSpace)
-  P.skipSpace *> "->" *> P.skipSpace
-  filters' <- P.option [] (filterParser `P.sepBy` (P.skipSpace *> "->" *> P.skipSpace) <* P.skipSpace <* "->" <* P.skipSpace)
+  routeId' <- skipSpace *> takeWhile1 (inClass "a-zA-Z0-9")
+  skipSpace *> ":" *> skipSpace
+  predicates' <- predicateParser `sepBy` (skipSpace *> "&&" *> skipSpace)
+  skipSpace *> "->" *> skipSpace
+  filters' <- option [] (filterParser `sepBy` (skipSpace *> "->" *> skipSpace) <* skipSpace <* "->" <* skipSpace)
   endpoint' <- endpointParser
-  P.skipSpace *> ";" *> P.skipSpace *> P.skipMany P.endOfLine
+  skipSpace *> ";" *> skipSpace *> skipMany endOfLine
   return $ Route routeId' predicates' filters' endpoint'
 
-commentLine :: P.Parser ()
+commentLine :: Parser ()
 commentLine = do
-  P.skipWhile (not . P.isEndOfLine)
+  skipWhile (not . isEndOfLine)
   return ()
 
 parseAndFormat :: String -> String
-parseAndFormat input = let routesOrError = P.parseOnly (many eskipRoute) (pack input) in
+parseAndFormat input = let routesOrError = parseOnly (many eskipRoute) (pack input) in
                            either id (unpack . concat . fmap prettyPrint) routesOrError
 
 main :: IO ()
@@ -102,14 +92,14 @@ main = interact parseAndFormat
 
 test :: IO ()
 test = do
-  let pRoute = prettyPrint <$> P.parseOnly eskipRoute "foo: bla(1) && blub() -> foo() -> bar(/reg/) -> <shunt>;"
+  let pRoute = prettyPrint <$> parseOnly eskipRoute "foo: bla(1) && blub(1.0) -> foo(1.1) -> bar(/reg/) -> <shunt>;"
   either print (putStrLn.unpack) pRoute
-  P.parseTest eskipRoute "foo: * -> <shunt>;"
-  P.parseTest eskipRoute "foo: bla(1) -> <shunt>;"
-  P.parseTest eskipRoute "foo: bla(0.67) -> <shunt>;"
-  P.parseTest eskipRoute "foo: bla(`1`) -> <shunt>;"
-  P.parseTest eskipRoute "foo: bla(1, \"2\", /3/) && blub() -> filter(1, \"2\", /3/) -> <shunt>;"
-  P.parseTest eskipRoute "foo: bla(1, \"2\", /3/) && blub() -> filter(1, \"2\", /3/) -> \"http://bla/blub\";"
+  parseTest eskipRoute "foo: * -> <shunt>;"
+  parseTest eskipRoute "foo: bla(1) -> <shunt>;"
+  parseTest eskipRoute "foo: bla(0.67) -> <shunt>;"
+  parseTest eskipRoute "foo: bla(`1`) -> <shunt>;"
+  parseTest eskipRoute "foo: bla(1, \"2\", /3/) && blub() -> filter(1, \"2\", /3/) -> <shunt>;"
+  parseTest eskipRoute "foo: bla(1, \"2\", /3/) && blub() -> filter(1, \"2\", /3/) -> \"http://bla/blub\";"
 
 class PrettyPrint a where
   prettyPrint :: a -> Text
@@ -119,13 +109,19 @@ instance PrettyPrint Endpoint where
   prettyPrint (Hostname h) = "\"" <> h <> "\""
 
 instance PrettyPrint Predicate where
-  prettyPrint (Predicate p) = predName p <> "(" <> intercalate ", " (predArgs p) <> ")"
+  prettyPrint (Predicate p) = predName p <> "(" <> intercalate ", " (prettyPrint <$> predArgs p) <> ")"
   prettyPrint CatchAll = "*"
 
 instance PrettyPrint Filter where
-  prettyPrint f = filterName f <> "(" <> intercalate ", " (filterArgs f) <> ")"
+  prettyPrint f = filterName f <> "(" <> intercalate ", " (prettyPrint <$> filterArgs f) <> ")"
 
 instance PrettyPrint Route where
   prettyPrint r = routeId r <> ": " <> intercalate " && " (prettyPrint <$> predicates r) <> "\n"
                   <> concat (flip append "\n" <$> append "  -> " <$> prettyPrint <$> filters r)
                   <> "  -> " <> prettyPrint (endpoint r) <> ";\n\n"
+
+instance PrettyPrint Argument where
+  prettyPrint (RegExpic a)              = a
+  prettyPrint (Textual a)               = a
+  prettyPrint (Numeric n) | isInteger n = pack (formatScientific Fixed (Just 0) n)
+  prettyPrint (Numeric n)               = pack (formatScientific Fixed Nothing n)

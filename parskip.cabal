@@ -19,3 +19,4 @@ executable parskip
   build-depends:       attoparsec
                      , base >= 4.7 && < 5
                      , text >= 1.2.2.0
+                     , scientific
