@@ -6,6 +6,7 @@ import Prelude hiding (concat)
 import Control.Applicative ((<|>), many)
 import Data.Text (Text, pack, unpack, concat, intercalate, append, cons, snoc)
 import Data.Monoid ((<>))
+import System.Environment (getArgs)
 import Data.Scientific (Scientific, FPFormat(Fixed), isInteger, formatScientific)
 import Data.Attoparsec.Text (Parser, skipSpace, skipMany, skipWhile, char, takeTill, takeWhile1, scientific, sepBy, inClass, option, endOfLine, isEndOfLine, parseOnly, parseTest)
 
@@ -83,16 +84,22 @@ commentLine = do
   skipWhile (not . isEndOfLine)
   return ()
 
-parseAndFormat :: String -> String
-parseAndFormat input = let routesOrError = parseOnly (many eskipRoute) (pack input) in
-                           either id (unpack . concat . fmap prettyPrint) routesOrError
+transformArg :: [String] -> Text
+transformArg ("--compact":_) = ""
+transformArg _ = "\n"
+
+parseAndFormat :: Text -> String -> String
+parseAndFormat sep input = let routesOrError = parseOnly (many eskipRoute) (pack input) in
+                           either id (unpack . concat . fmap (prettyPrint sep)) routesOrError
 
 main :: IO ()
-main = interact parseAndFormat
+main = do
+  args <- getArgs
+  interact $ parseAndFormat $ transformArg args
 
 test :: IO ()
 test = do
-  let pRoute = prettyPrint <$> parseOnly eskipRoute "foo: bla(1) && blub(1.0) -> foo(1.1) -> bar(/reg/) -> <shunt>;"
+  let pRoute = prettyPrint "" <$> parseOnly eskipRoute "foo: bla(1) && blub(1.0) -> foo(1.1) -> bar(/reg/) -> <shunt>;"
   either print (putStrLn.unpack) pRoute
   parseTest eskipRoute "foo: * -> <shunt>;"
   parseTest eskipRoute "foo: bla(1) -> <shunt>;"
@@ -102,27 +109,39 @@ test = do
   parseTest eskipRoute "foo: bla(1, \"2\", /3/) && blub() -> filter(1, \"2\", /3/) -> \"http://bla/blub\";"
 
 class PrettyPrint a where
-  prettyPrint :: a -> Text
+  prettyPrint :: Text -> a -> Text
 
 instance PrettyPrint Endpoint where
-  prettyPrint Shunt = "<shunt>"
-  prettyPrint (Hostname h) = "\"" <> h <> "\""
+  prettyPrint _ Shunt = "<shunt>"
+  prettyPrint _ (Hostname h) = "\"" <> h <> "\""
 
 instance PrettyPrint Predicate where
-  prettyPrint (Predicate p) = predName p <> "(" <> intercalate ", " (prettyPrint <$> predArgs p) <> ")"
-  prettyPrint CatchAll = "*"
+  prettyPrint newLine (Predicate p) = predName p <> "(" <> intercalate ", " (prettyPrint newLine <$> predArgs p) <> ")"
+  prettyPrint _ CatchAll = "*"
 
 instance PrettyPrint Filter where
-  prettyPrint f = filterName f <> "(" <> intercalate ", " (prettyPrint <$> filterArgs f) <> ")"
+  prettyPrint newLine f = filterName f <> "(" <> intercalate ", " (prettyPrint newLine <$> filterArgs f) <> ")"
 
 instance PrettyPrint Route where
-  prettyPrint r = routeId r <> ": " <> intercalate " && " (prettyPrint <$> predicates r) <> "\n"
-                  <> concat (flip append "\n" <$> append "  -> " <$> prettyPrint <$> filters r)
-                  <> "  -> " <> prettyPrint (endpoint r) <> ";\n\n"
+  prettyPrint newLine r =
+        routeId r <> ": " <> predicates' <>
+        filters' <> "  -> " <>
+        endpoint' <>
+        end'
+    where
+      pr :: PrettyPrint a => a -> Text
+      pr = prettyPrint newLine
+      predicates' = intercalate " && " (pr <$> predicates r) <> newLine
+      filters' = concat (flip append newLine <$> append "  -> " <$> pr <$> filters r)
+      endpoint' = pr (endpoint r)
+      end' = concat [";", "\n", newLine]
 
 instance PrettyPrint Argument where
-  prettyPrint (RegExpic a)              = a
-  prettyPrint (Textual a)               = a
-  prettyPrint (Numeric n) | isInteger n = pack (formatScientific Fixed (Just 0) n)
-  prettyPrint (Numeric n)               = pack (formatScientific Fixed Nothing n)
+  prettyPrint _ (RegExpic a) = a
+  prettyPrint _ (Textual a)  = a
+  prettyPrint _ (Numeric n)  = pack (formatScientific Fixed (t n) n)
+    where
+      t n
+        | isInteger n = Just 0
+        | otherwise   = Nothing
 
